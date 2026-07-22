@@ -1,0 +1,181 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+const int TRIG_PIN = 9;
+const int ECHO_PIN = 10;
+
+const int GREEN_LED = 6;
+const int RED_LED = 7;
+
+const int BUZZER_PIN = 8;
+
+float previousDistance = 0;
+unsigned long previousTime = 0;
+bool firstReading = true;
+
+unsigned long lastMeasurement = 0;
+const int measurementInterval = 100;
+
+float filteredSpeed = 0;
+const float ALPHA = 0.3;
+
+float medirDistancia() {
+
+  const int NUM_LEITURAS = 5;
+  float soma = 0;
+
+  for (int i = 0; i < NUM_LEITURAS; i++) {
+
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+
+    digitalWrite(TRIG_PIN, LOW);
+
+    long duration = pulseIn(ECHO_PIN, HIGH);
+
+    float distancia = duration * 0.0343 / 2;
+
+    soma += distancia;
+
+    delay(5);
+  }
+
+  return soma / NUM_LEITURAS;
+}
+
+float calcularVelocidade(float distanciaAtual, unsigned long tempoAtual) {
+
+  if (firstReading) {
+    previousDistance = distanciaAtual;
+    previousTime = tempoAtual;
+    firstReading = false;
+    return 0;
+  }
+
+  float deltaDistance = previousDistance - distanciaAtual;
+
+  if (abs(deltaDistance) < 0.5) {
+    deltaDistance = 0;
+  }
+
+  unsigned long deltaTime = tempoAtual - previousTime;
+
+  float velocidade = (deltaDistance / deltaTime) * 36;
+
+  filteredSpeed = ALPHA * velocidade + (1 - ALPHA) * filteredSpeed;
+
+  previousDistance = distanciaAtual;
+  previousTime = tempoAtual;
+
+  return filteredSpeed;
+}
+
+void escreverCentralizado(const char* texto, int y, int tamanho) {
+
+  display.setTextSize(tamanho);
+  display.setTextColor(SSD1306_WHITE);
+
+  int largura = strlen(texto) * 6 * tamanho;
+
+  int x = (SCREEN_WIDTH - largura) / 2;
+
+  display.setCursor(x, y);
+  display.print(texto);
+}
+
+void atualizarDisplay(float velocidade, float distancia) {
+
+  char velocidadeTexto[20];
+  char distanciaTexto[20];
+
+  dtostrf(velocidade, 4, 1, velocidadeTexto);
+  strcat(velocidadeTexto, " km/h");
+
+  dtostrf(distancia, 4, 1, distanciaTexto);
+  strcat(distanciaTexto, " cm");
+
+  display.clearDisplay();
+
+  escreverCentralizado("RADAR", 0, 2);
+  escreverCentralizado(velocidadeTexto, 24, 2);
+  escreverCentralizado(distanciaTexto, 48, 2);
+
+  display.display();
+}
+
+void atualizarLeds(float velocidade) {
+
+  const float LIMITE = 5.0;
+
+  if (velocidade > LIMITE) {
+
+    digitalWrite(GREEN_LED, LOW);
+    digitalWrite(RED_LED, HIGH);
+    tone(BUZZER_PIN, 1000);
+
+  } else {
+
+    digitalWrite(GREEN_LED, HIGH);
+    digitalWrite(RED_LED, LOW);
+    noTone(BUZZER_PIN);
+
+  }
+}
+
+void setup() {
+
+  Serial.begin(9600);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("Falha ao iniciar o display OLED");
+    while (true);
+  }
+
+  display.clearDisplay();
+  escreverCentralizado("RADAR", 20, 2);
+  display.display();
+
+  delay(2000);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+}
+
+void loop() {
+
+  unsigned long now = millis();
+
+  if (now - lastMeasurement < measurementInterval) {
+    return;
+  }
+
+  lastMeasurement = now;
+
+  float distance = medirDistancia();
+
+  float speed = calcularVelocidade(distance, now);
+
+  atualizarDisplay(speed, distance);
+
+  atualizarLeds(speed);
+
+  Serial.print("Distancia: ");
+  Serial.print(distance);
+  Serial.print(" cm | Velocidade: ");
+  Serial.print(speed);
+  Serial.println(" km/h");
+}
